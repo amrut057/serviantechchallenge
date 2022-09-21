@@ -1,0 +1,93 @@
+name: deploy-techchallengeapp
+
+on:
+  dispatch_workflow:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy-docker-app:
+    name: 'deploy-techchallengeapp'
+    runs-on: windows-latest
+
+    - name: Checkout Repo
+      uses: actions/checkout@v3
+    
+    - name: 'Az CLI login'
+      uses: azure/login@v1
+      with:
+        client-id: ${{ secrets.AZURE_CLIENT_ID }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    
+    - name: 'setup backend'
+      id: setup_backend
+      run: |
+        $rgName = "servian-techchallenge-backend-rg"
+        $stName = "backendst"
+        $containerName = "backend"
+        $result = az group exists --name $rgName
+        if ($result -eq $true) {
+          $storagekeys = az storage account keys list -g $rgName -n $stName | ConvertFrom-Json
+          $primaryKey = $storagekeys[0].value
+          $containerExists = az storage container exists --name $containerName --account-name $stName --account-key $storagekeys[0].value | ConvertFrom-Json
+          Write-Host "container exists is $containerExists.exists"
+          if ($containerExists.exists -eq $false) {
+            Write-Host "Creating backend storage container............"
+            az storage container create -n $containerName --account-name $stName --account-key $storagekeys[0].value
+          }
+        }
+
+    - name: Setup Terraform
+      uses: autero1/action-terraform@v0.1.0
+      with:
+        terraform_version: 1.2.5
+    
+    - name: Initilaise Terraform
+      id: init
+      working-directory: .\infrastructure
+      run: |
+        terraform init -backend-config=storage_account_name=${{ env.backend_storage }} -backend-config=container_name=${{ env.backend_container }} -backend-config=key="servianapp.tfstate" -backend-config=resource_group_name=${{ env.backend_rg }}
+      env:
+        ARM_USE_OIDC: true
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+    
+    - name: Terraform Validate
+      id: validate
+      working-directory: .\terraform\main\platform-services\main
+      run: |
+          terraform validate
+      env:
+        ARM_USE_OIDC: true
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        TF_VAR_dbpassword: ${{ secrets.dbpassword }}
+
+    - name: Terraform Plan
+      id: plan
+      working-directory: .\terraform\main\platform-services\main
+      run: |
+          terraform plan -var-file="${{ env.terraformVarFileName }}-trial.tfvars" -out=tfplan
+      env:
+        ARM_USE_OIDC: true
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        TF_VAR_dbpassword: ${{ secrets.dbpassword }}
+    
+    - name: Terraform Apply
+      id: apply
+      working-directory: .\terraform\main\platform-services\main
+      run: |
+          terraform apply tfplan
+      env:
+        ARM_USE_OIDC: true
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ env.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        TF_VAR_dbpassword: ${{ secrets.dbpassword }}

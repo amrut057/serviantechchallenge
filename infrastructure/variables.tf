@@ -15,10 +15,10 @@ variable "pg_server_name" {
 
 variable "sku_name" {
   type = string
-  default = "B_Gen4_1"
+  default = "B_Gen5_1"
 }
 
-variable "version" {
+variable "pg_version" {
   type = number
   default = 9.5
 }
